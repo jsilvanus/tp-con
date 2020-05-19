@@ -1,3 +1,3 @@
 @echo off
-set CLASSPATH=.
+set CLASSPATH=%~dp0
 java ExamplePlugin %*

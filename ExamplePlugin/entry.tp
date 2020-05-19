@@ -1,0 +1,65 @@
+{
+  "sdk":1,
+  "version":1,
+  "name":"Example Plugin",
+  "id":"tpexampleplugin",
+  "configuration" : {
+    "colorDark" : "#992211",
+    "colorLight" : "#0033d3"
+  },
+  "categories": [
+    {
+      "id":"tpep-test",
+      "name":"Example Plugin Tester",
+      "imagepath":"%TP_PLUGIN_FOLDER%ExamplePlugin\\example.png",
+      "actions": [
+        {
+        "id":"tpep-updatestate-one",
+        "prefix":"Do the following action:",
+        "name":"Update State with Example Plugin: Testone",
+        "description":"This will change the state to testone.",
+        "format":"Example State: TestOne",
+        "type":"execute",
+        "execution_cmd":"%TP_PLUGIN_FOLDER%ExamplePlugin\\example.bat testone",
+        },
+        {
+          "id":"tpep-updatestate-two",
+          "prefix":"Do the following action:",
+          "name":"Update State with Example Plugin: Testtwo",
+          "description":"This will change the state to testtwo.",
+          "format":"Example State: TestTwo",
+          "type":"execute",
+          "execution_cmd":"%TP_PLUGIN_FOLDER%ExamplePlugin\\example.bat testtwo",
+        },
+        ],
+    "events": [
+    {
+      "id":"tpep-event",
+      "name":"When example state changes",
+      "format":"When example state changes to $val",
+      "type":"communicate",
+      "valueType":"choice",
+      "valueChoices": [
+        "testone",
+        "testtwo",
+        "nothing",
+      ],
+      "valueStateId":"examplestate",
+    }
+  ],
+      "states": [
+        {
+            "id":"examplestate",
+            "type":"choice",
+            "desc":"Example Plugin State",
+            "default":"nothing",
+            "valueChoices": [
+              "nothing",
+              "testone",
+              "testtwo",
+             ],
+        },
+      ],
+    }
+  ]
+}

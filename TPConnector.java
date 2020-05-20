@@ -2,6 +2,8 @@ import java.io.DataOutputStream;
 import java.io.DataInputStream;
 import java.io.OutputStream;
 import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.BufferedReader;
 import java.io.IOException;
 import java.net.Socket;
 import java.util.Arrays;
@@ -9,15 +11,21 @@ import java.util.ArrayList;
 import java.util.List;
 import java.time.format.DateTimeFormatter;
 import java.time.LocalDateTime;
+import java.lang.Thread;
+import java.lang.Runnable;
 
 public class TPConnector {
     // Constants
-    final private int LISTENING_INTERVAL_MILLISECONDS = 200;
+    final private int HEARTBEAT_INTERVAL_DEFAULT = 200;
     final private String DEFAULT_HOST = "127.0.0.1";
     final private int DEFAULT_PORT = 12136;
 
-    // Static Vector for listing all TPConnectors
+    // Static Arraylist for listing all TPConnectors
     private static List<TPConnector> allConnectors;
+
+    // Arraylist for sent and received messages of this connector
+    private List<String> MessagesToSend;
+    private List<String> MessagesReceived;
 
     // Basic information for contacting TP
     private String PluginID; // only set at object creation
@@ -30,10 +38,12 @@ public class TPConnector {
     // By default this simply sends a message and then quits
     public boolean ContinueListening = false;
 
-    // Socket & Data Streams
+    // Socket & Data Streams & Heartbeat Runnable
     private Socket TPSocket;
     private DataInputStream StreamIn;
     private DataOutputStream StreamOut;
+    private PluginHeartbeat Heartbeat;
+    private Thread HeartbeatThread;
 
     // SOME ABSTRACTS
     public void checkListening() { }
@@ -204,24 +214,23 @@ public class TPConnector {
       this.DebugState = Debug;
       this.DebugTime = Timer;
 
+      debugMessage("DEBUG: creating message arrays.");
+      MessagesToSend = new ArrayList<String>();
+      MessagesReceived = new ArrayList<String>();
+
       if(StartListening) debugMessage("DEBUG: creating new listening connector "+id);
       else debugMessage("DEBUG: creating new connector "+id);
+
+      // Start the heartbeat here!
 
       allConnectors.add( this ); // add this to the list
     }
 
     // *** FUNCTIONALITY
-    // Functionality to use a method for host & port setting. Set only once! (finals)
-    public void setHost(String host, int port)
-    {
-      HostName = host;
-      HostPort = port;
-    }
-
     // Functionality to connect socket & streams and close them
-    public void connect(boolean Pair) throws IOException
+    public void connect() throws IOException
     {
-      if(PluginID == null) throw new IOException("ERROR: no pluginID");
+      if(PluginID == null) { throw new IOException("ERROR: no pluginID"); }
 
       if(HostName == null)
       {
@@ -249,15 +258,7 @@ public class TPConnector {
       StreamIn = new DataInputStream(TPSocket.getInputStream());
 
       debugMessage("DEBUG: pairing the socket with Touch Portal");
-      if(Pair) {
-        try { this.sendMessage(this.constructJSONPAir()); }
-        catch (IOException e) { e.printStackTrace(); }
-      }
-    }
-
-    public void connect() throws IOException
-    {
-      this.connect(true);
+      this.writeMessage(this.constructJSONPAir());
     }
 
     public void close() throws IOException
@@ -267,23 +268,71 @@ public class TPConnector {
 
       debugMessage("DEBUG: closing datainputstream");
       this.StreamIn.close();
-
       debugMessage("DEBUG: closing dataoutputstream");
       this.StreamOut.close();
-
       debugMessage("DEBUG: closing socket");
       this.TPSocket.close();
     }
 
     // *** FUNCTIONALITY
     // Send a message
-    public void sendMessage(String msg) throws IOException
+    public void writeMessage(String msg)
     {
-      if(TPSocket == null || StreamOut == null) { throw new IOException("ERROR: no socket or output stream"); }
-      debugMessage("DEBUG: sending message: "+msg);
+      debugMessage("DEBUG: adding message to pool: "+msg);
+      MessagesToSend.add(msg);
+
+      // checkHeartbeat();
+    }
+
+    // this will send one message to the plugin - called by the heartbeat
+    private void sendMessage() throws IOException
+    {
+      if(MessagesToSend.size() < 1) return;
+      if((TPSocket == null) || (StreamOut == null)) { throw new IOException("ERROR: no socket or output stream"); }
+
+      String msg = MessagesToSend.get(0);
+      MessagesToSend.remove(0);
       StreamOut.writeBytes(msg+"\n");
       StreamOut.flush();
     }
+
+    private void readMessages() throws IOException
+    {
+      if((TPSocket == null) || (StreamOut == null)) { throw new IOException("ERROR: no socket or output stream"); }
+
+      InputStreamReader streamReader = new InputStreamReader(StreamIn);
+      BufferedReader reader = new BufferedReader(streamReader);
+
+      try {
+        String value;
+        while((value = reader.readLine()) != null) {
+          MessagesReceived.add(value); }
+      } catch (IOException e) { throw e; }
+
+      reader.close();
+      // parseMessages is called by heartbeat.
+    }
+
+    private void parseMessage(String msg)
+    {
+      debugMessage("Message received: "+msg);
+    }
+
+    private void parseMessages()
+    {
+      while(MessagesReceived.size() > 1)
+      {
+        String msg = MessagesReceived.get(0);
+        MessagesReceived.remove(0);
+        parseMessage(msg);
+      }
+      // Iterate over MessagesReceived and remove then and parse them
+      // this will parse messages in MessagesReceived and send them to corresponding methods, see below
+    }
+
+    private void receiveDynamicAction(String actionID, String dataJSON) { }
+
+    private void receiveDynamicListChoice(String actionID, String listID, String instanceID, String value) { }
 
     // *** MAIN
     public static void main(String[] args) throws IOException
@@ -301,6 +350,85 @@ public class TPConnector {
         "    note: alternative 2 is if you want to use | in the choices\n";
 
       System.out.println(SYNTAX_MESSAGE);
+    }
 
+    // *** HEARTBEAT FUNCTIONALITY incl. a nested runnable class
+    public void startHeartbeat()
+    {
+      if((Heartbeat != null)||(HeartbeatThread != null))
+      {
+        debugMessage("Heartbeat or Heartbeat Thread exists already.");
+        return;
+      }
+      debugMessage("Creating new heartbeat and starting it.");
+      Heartbeat = this.new PluginHeartbeat();
+      HeartbeatThread = new Thread(Heartbeat);
+      HeartbeatThread.start();
+    }
+
+    public void stopHeartbeat()
+    {
+      if(Heartbeat == null)
+      {
+        debugMessage("Tried to stop non-existent heartbeat.");
+        return;
+      }
+      Heartbeat.stopHeartbeat();
+    }
+
+    private Thread checkHeartbeatThread()
+    {
+       debugMessage("Checking for heartbeat...");
+       if(HeartbeatThread == null) { startHeartbeat(); }
+
+       return HeartbeatThread;
+    }
+
+    private void beat()
+    {
+      // override this if you want
+    }
+
+    private class PluginHeartbeat implements Runnable
+    {
+      private int HeartbeatInterval;
+      private boolean ReportAllHeartbeats;
+      private boolean ContinueHeartbeat = true;
+
+      public PluginHeartbeat(int hbint, boolean allhearts)
+      {
+        HeartbeatInterval = hbint;
+        ReportAllHeartbeats = allhearts;
+      }
+
+      public PluginHeartbeat()
+      {
+        this(HEARTBEAT_INTERVAL_DEFAULT,false);
+      }
+
+      public void stopHeartbeat() { ContinueHeartbeat = false; }
+
+      @Override
+      public void run()
+      {
+        debugMessage("Running heartbeat for "+TPConnector.this.PluginID);
+
+        while(ContinueHeartbeat)
+        {
+          try {
+              TPConnector.this.beat(); // do something that another plugin author wants!
+              TPConnector.this.sendMessage(); // only one msg sent per heartbeat
+              TPConnector.this.readMessages(); // all messages read every heartbeat ...
+              TPConnector.this.parseMessages(); // ... and parsed.
+              // Let the thread sleep for a while.
+              Thread.sleep(HeartbeatInterval); }
+          catch (IOException | InterruptedException e) {
+              debugMessage("Heartbeat for "+TPConnector.this.PluginID+" was interrupted.");
+              e.printStackTrace(); }
+        }
+
+       debugMessage("Heartbeat for "+TPConnector.this.PluginID+" stopped.");
+       // Let the superclass know this can now die.
+      }
     }
 }
